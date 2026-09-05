@@ -48,10 +48,11 @@ jobs:
       - name: Stage this repository as a feed
         run: |
           set -euo pipefail
-          mkdir -p .sdk-feed/agent-runtime sdk-artifacts release-assets
-          tar --exclude=.git --exclude=.github --exclude=.sdk-feed --exclude=sdk-artifacts --exclude=release-assets -cf - . \
-            | tar -C .sdk-feed/agent-runtime -xf -
-          find .sdk-feed -name Makefile | sort
+          mkdir -p sdk-artifacts release-assets
+          # Feed root is the repository checkout itself (a real git repo),
+          # the standard gh-action-sdk layout: packages/*/<pkg>/Makefile.
+          # Tar-staging into .sdk-feed excluded .git, which broke the SDK's
+          # git-based checks and made feeds scan skip luci-app packages.
 
       - name: Build SDK packages
         uses: openwrt/gh-action-sdk@main
@@ -59,15 +60,9 @@ jobs:
           ARCH: ${{ matrix.sdk_arch }}
           ARTIFACTS_DIR: ${{ github.workspace }}/sdk-artifacts
           BUILD_LOG: 1
-          FEED_DIR: ${{ github.workspace }}/.sdk-feed
+          FEED_DIR: ${{ github.workspace }}
           FEEDNAME: agent_runtime
           INDEX: 1
-          # The feed is staged by tar without .git, so gh-action-sdk's
-          # shfmt check (`git -C <files> diff --quiet`) always fails with
-          # "fatal: not a git repository" and is a false positive. Init
-          # scripts are kept shfmt-compliant in-tree; skip the git-based
-          # check in the SDK container.
-          NO_SHFMT_CHECK: 1
           PACKAGES: agent-runtime luci-app-agent-runtime
           KEY_BUILD: ${{ secrets.IPK_SIGNING_KEY }}
           PRIVATE_KEY: ${{ secrets.APK_SIGNING_KEY }}
