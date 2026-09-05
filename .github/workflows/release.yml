@@ -76,7 +76,9 @@ jobs:
           printf '%s\n' "$found" | grep -E '/(agent-runtime|luci-app-agent-runtime)(_|-)[^/]+\.${{ matrix.extension }}$'
           target="release-assets/${{ matrix.extension }}-${{ matrix.target_arch }}"
           mkdir -p "$target"
-          find sdk-artifacts -type f \( -name "*.${{ matrix.extension }}" -o -name 'Packages*' -o -name 'APKINDEX*' -o -name 'packages.adb' -o -name 'index.json' \) -exec cp {} "$target" \;
+          # Copy only our two packages (and nothing else from bin/packages,
+          # which also holds base/packages feed ipks/apks such as zlib).
+          find sdk-artifacts -type f \( -name "agent-runtime*.${{ matrix.extension }}" -o -name "luci-app-agent-runtime*.${{ matrix.extension }}" \) -exec cp {} "$target" \;
           (cd "$target" && sha256sum * > SHA256SUMS)
 
       - uses: actions/upload-artifact@v4
