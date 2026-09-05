@@ -51,6 +51,7 @@ jobs:
           mkdir -p .sdk-feed/agent-runtime sdk-artifacts release-assets
           tar --exclude=.git --exclude=.github --exclude=.sdk-feed --exclude=sdk-artifacts --exclude=release-assets -cf - . \
             | tar -C .sdk-feed/agent-runtime -xf -
+          find .sdk-feed -name Makefile | sort
 
       - name: Build SDK packages
         uses: openwrt/gh-action-sdk@main
