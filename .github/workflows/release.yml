@@ -73,7 +73,7 @@ jobs:
           set -euo pipefail
           found="$(find sdk-artifacts -type f -name "*.${{ matrix.extension }}" -print)"
           test -n "$found"
-          printf '%s\n' "$found" | grep -E '/(agent-runtime|luci-app-agent-runtime)_[^/]+\.${{ matrix.extension }}$'
+          printf '%s\n' "$found" | grep -E '/(agent-runtime|luci-app-agent-runtime)(_|-)[^/]+\.${{ matrix.extension }}$'
           target="release-assets/${{ matrix.extension }}-${{ matrix.target_arch }}"
           mkdir -p "$target"
           find sdk-artifacts -type f \( -name "*.${{ matrix.extension }}" -o -name 'Packages*' -o -name 'APKINDEX*' -o -name 'packages.adb' -o -name 'index.json' \) -exec cp {} "$target" \;
