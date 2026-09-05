@@ -121,7 +121,15 @@ jobs:
         run: |
           set -euo pipefail
           find release-assets -type f \( -name '*.ipk' -o -name '*.apk' \) -exec sha256sum {} \; | sort -k2 > release-assets/SHA256SUMS
-          assets=("$(find release-assets -type f \( -name '*.ipk' -o -name '*.apk' -o -name SHA256SUMS \) -print)")
           # shellcheck disable=SC2086
-          gh release create "$GITHUB_REF_NAME" $assets --generate-notes --repo "$GITHUB_REPOSITORY" \
-            || gh release upload "$GITHUB_REF_NAME" $assets --clobber --repo "$GITHUB_REPOSITORY"
+          assets=$(find release-assets -type f \( -name '*.ipk' -o -name '*.apk' -o -name SHA256SUMS \) -print | tr '\n' ' ')
+          gh release create "$GITHUB_REF_NAME" --generate-notes --repo "$GITHUB_REPOSITORY" || true
+          for i in 1 2 3 4 5; do
+            if gh release upload "$GITHUB_REF_NAME" $assets --clobber --repo "$GITHUB_REPOSITORY"; then
+              exit 0
+            fi
+            echo "upload attempt $i failed, retrying..."
+            sleep 5
+          done
+          echo "release upload failed after 5 attempts" >&2
+          exit 1
