@@ -113,10 +113,15 @@ jobs:
       - name: Verify release asset matrix
         run: |
           set -euo pipefail
-          find release-assets -type f -name '*.ipk' | grep .
-          find release-assets -type f -name '*.apk' | grep .
-          find release-assets -type f -name SHA256SUMS | sort
-      - uses: softprops/action-gh-release@v2
-        with:
-          generate_release_notes: true
-          files: release-assets/**
+          find release-assets -type f -name '*.ipk' -print
+          find release-assets -type f -name '*.apk' -print
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          find release-assets -type f \( -name '*.ipk' -o -name '*.apk' \) -exec sha256sum {} \; | sort -k2 > release-assets/SHA256SUMS
+          assets=("$(find release-assets -type f \( -name '*.ipk' -o -name '*.apk' -o -name SHA256SUMS \) -print)")
+          # shellcheck disable=SC2086
+          gh release create "$GITHUB_REF_NAME" $assets --generate-notes --repo "$GITHUB_REPOSITORY" \
+            || gh release upload "$GITHUB_REF_NAME" $assets --clobber --repo "$GITHUB_REPOSITORY"
