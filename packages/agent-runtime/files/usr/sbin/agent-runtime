@@ -1,0 +1,199 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+# Fixed-function runtime observer. It deliberately accepts no URL, command,
+# package, path, service, or archive argument from callers.
+
+set -u
+
+PATH='/usr/sbin:/usr/bin:/sbin:/bin'
+JSON=0
+UCI_BIN="${AGENT_RUNTIME_UCI_BIN:-/sbin/uci}"
+
+usage() {
+	printf '%s\n' 'usage: agent-runtime {status|list|check|verify|reconcile} [--json]'
+}
+
+config_get() {
+	"$UCI_BIN" -q get "agent_runtime.main.$1" 2>/dev/null || true
+}
+
+json_escape() {
+	printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\r/\\r/g; s/\n/\\n/g'
+}
+
+emit() {
+	# $1 ok, $2 code, $3 message, $4 exit status, $5 JSON data
+	if [ "$JSON" -eq 1 ]; then
+		printf '{"ok":%s,"code":"%s","message":"%s","data":%s}\n' \
+			"$1" "$2" "$(json_escape "$3")" "${5:-{}}"
+	else
+		printf '%s: %s\n' "$2" "$3"
+	fi
+	exit "$4"
+}
+
+safe_absolute_path() {
+	case "$1" in
+		/*) case "$1" in *'..'*|*'//'*) return 1 ;; esac ;;
+		*) return 1 ;;
+	esac
+	return 0
+}
+
+safe_https_url() {
+	case "$1" in
+		https://[A-Za-z0-9.-]*|https://[A-Za-z0-9.-]*/*) ;;
+		*) return 1 ;;
+	esac
+	case "$1" in *'?'*|*'#'*|*' '*|*'..'*) return 1 ;; esac
+	return 0
+}
+
+configured_path() {
+	value="$(config_get "$1")"
+	[ -n "$value" ] || value="$2"
+	safe_absolute_path "$value" || return 1
+	printf '%s' "$value"
+}
+
+DATA_ROOT="$(configured_path data_root /data 2>/dev/null || true)"
+RUNTIME_ROOT="$(configured_path runtime_root /data/agent-runtime 2>/dev/null || true)"
+BASELINE_ROOT="$(configured_path baseline_root /opt/agent-runtime 2>/dev/null || true)"
+PUBLIC_KEY="$(configured_path public_key /etc/agent-runtime/usign.pub 2>/dev/null || true)"
+
+data_mounted() {
+	[ -n "$DATA_ROOT" ] || return 1
+	awk -v target="$DATA_ROOT" '$2 == target { found=1 } END { exit !found }' /proc/mounts 2>/dev/null
+}
+
+data_writable() {
+	[ -n "$DATA_ROOT" ] && [ -d "$DATA_ROOT" ] && [ ! -L "$DATA_ROOT" ] && [ -w "$DATA_ROOT" ]
+}
+
+read_link_or_empty() {
+	[ -L "$1" ] || return 0
+	readlink "$1" 2>/dev/null || true
+}
+
+safe_generation_name() {
+	case "$1" in ''|*[!A-Za-z0-9._-]*) return 1 ;; esac
+	return 0
+}
+
+command_version() {
+	command -v "$1" >/dev/null 2>&1 || return 0
+	"$1" --version 2>/dev/null | sed -n '1p' | cut -c 1-120 || true
+}
+
+generation_json() {
+	root="$RUNTIME_ROOT/generations"
+	first=1
+	printf '['
+	[ -d "$root" ] && [ ! -L "$root" ] || { printf ']'; return; }
+	for entry in "$root"/*; do
+		[ -d "$entry" ] && [ ! -L "$entry" ] || continue
+		name="${entry##*/}"
+		case "$name" in ''|*[!A-Za-z0-9._-]*) continue ;; esac
+		[ "$first" -eq 1 ] || printf ','
+		printf '"%s"' "$(json_escape "$name")"
+		first=0
+	done
+	printf ']'
+}
+
+status_data() {
+	active="$(read_link_or_empty "$RUNTIME_ROOT/current")"
+	previous="$(read_link_or_empty "$RUNTIME_ROOT/previous")"
+	release_url="$(config_get release_url)"
+	if data_mounted; then mounted=true; else mounted=false; fi
+	if data_writable; then writable=true; else writable=false; fi
+	if [ -d "$BASELINE_ROOT" ] && [ ! -L "$BASELINE_ROOT" ]; then baseline=true; else baseline=false; fi
+	if [ -f "$PUBLIC_KEY" ] && [ ! -L "$PUBLIC_KEY" ]; then public_key=true; else public_key=false; fi
+	printf '{"schema_version":1,"storage":{"path":"%s","mounted":%s,"writable":%s},' \
+		"$(json_escape "$DATA_ROOT")" "$mounted" "$writable"
+	printf '"runtime":{"root":"%s","baseline_present":%s,"active":"%s","previous":"%s","generations":%s},' \
+		"$(json_escape "$RUNTIME_ROOT")" "$baseline" "$(json_escape "$active")" "$(json_escape "$previous")" "$(generation_json)"
+	printf '"release":{"configured":%s,"public_key_present":%s},' \
+		"$([ -n "$release_url" ] && printf true || printf false)" "$public_key"
+	printf '"integrations":{"node":"%s","pi":"%s","cmdc":"%s","multica":"%s"}}' \
+		"$(json_escape "$(command_version node)")" \
+		"$(json_escape "$(command_version pi)")" \
+		"$(json_escape "$(command_version cmdc)")" \
+		"$(json_escape "$(command_version multica)")"
+}
+
+status() {
+	emit true ok 'runtime status collected' 0 "$(status_data)"
+}
+
+list() {
+	emit true ok 'runtime generations listed' 0 "{\"generations\":$(generation_json),\"active\":\"$(json_escape "$(read_link_or_empty "$RUNTIME_ROOT/current")")\"}"
+}
+
+check() {
+	url="$(config_get release_url)"
+	[ -n "$url" ] || emit false not_configured 'release_url is not configured' 4 '{}'
+	safe_https_url "$url" || emit false invalid_config 'release_url must be a credential-free HTTPS base URL' 2 '{}'
+	[ -f "$PUBLIC_KEY" ] && [ ! -L "$PUBLIC_KEY" ] || emit false key_missing 'configured usign public key is unavailable' 5 '{}'
+	command -v wget >/dev/null 2>&1 || emit false dependency_missing 'wget is unavailable' 127 '{}'
+	command -v usign >/dev/null 2>&1 || emit false dependency_missing 'usign is unavailable' 127 '{}'
+	tmpdir="$(mktemp -d /tmp/agent-runtime-check.XXXXXX 2>/dev/null || true)"
+	[ -n "$tmpdir" ] || emit false temporary_failure 'unable to create a temporary directory' 1 '{}'
+	trap 'rm -rf "$tmpdir"' EXIT HUP INT TERM
+	base="${url%/}"
+	wget -q -O "$tmpdir/index.json" "$base/index.json" || emit false download_failed 'unable to download the signed release index' 9 '{}'
+	wget -q -O "$tmpdir/index.json.sig" "$base/index.json.sig" || emit false download_failed 'unable to download the release-index signature' 9 '{}'
+	usign -V -p "$PUBLIC_KEY" -m "$tmpdir/index.json" -x "$tmpdir/index.json.sig" >/dev/null 2>&1 || \
+		emit false signature_invalid 'release-index signature verification failed' 5 '{}'
+	command -v jsonfilter >/dev/null 2>&1 || emit false dependency_missing 'jsonfilter is unavailable' 127 '{}'
+	schema="$(jsonfilter -i "$tmpdir/index.json" -e '@.schema_version' 2>/dev/null | sed -n '1p')"
+	case "$schema" in ''|*[!0-9]*) emit false invalid_index 'signed release index has no numeric schema_version' 6 '{}' ;; esac
+	emit true ok 'signed release index verified; no payload was installed' 0 "{\"schema_version\":$schema}"
+}
+
+verify() {
+	active="$(read_link_or_empty "$RUNTIME_ROOT/current")"
+	case "$active" in
+		"$BASELINE_ROOT") manifest="$BASELINE_ROOT/manifest.json" ;;
+		generations/*)
+			name="${active#generations/}"
+			[ "$active" = "generations/$name" ] && safe_generation_name "$name" || \
+				emit false active_missing 'no recognised active runtime is configured' 4 '{}'
+			manifest="$RUNTIME_ROOT/generations/$name/manifest.json"
+			;;
+		"$RUNTIME_ROOT"/generations/*)
+			name="${active#"$RUNTIME_ROOT"/generations/}"
+			[ "$active" = "$RUNTIME_ROOT/generations/$name" ] && safe_generation_name "$name" || \
+				emit false active_missing 'no recognised active runtime is configured' 4 '{}'
+			manifest="$RUNTIME_ROOT/generations/$name/manifest.json"
+			;;
+		*) emit false active_missing 'no recognised active runtime is configured' 4 '{}' ;;
+	esac
+	[ -f "$manifest" ] && [ ! -L "$manifest" ] || emit false manifest_missing 'active runtime manifest is unavailable' 4 '{}'
+	[ -f "$PUBLIC_KEY" ] && [ ! -L "$PUBLIC_KEY" ] || emit false key_missing 'configured usign public key is unavailable' 5 '{}'
+	[ -f "$manifest.sig" ] && [ ! -L "$manifest.sig" ] || emit false signature_missing 'active runtime manifest signature is unavailable' 5 '{}'
+	usign -V -p "$PUBLIC_KEY" -m "$manifest" -x "$manifest.sig" >/dev/null 2>&1 || \
+		emit false signature_invalid 'active runtime manifest signature verification failed' 5 '{}'
+	emit true ok 'active runtime manifest signature verified' 0 '{}'
+}
+
+reconcile() {
+	# This command intentionally does not change generations, services or UCI.
+	# It is safe for boot-time use and refreshes only the caller-visible status.
+	emit true ok 'runtime status reconciled without mutation' 0 "$(status_data)"
+}
+
+[ "$#" -ge 1 ] || { usage >&2; exit 2; }
+action="$1"
+shift
+if [ "${1:-}" = '--json' ]; then JSON=1; shift; fi
+[ "$#" -eq 0 ] || { usage >&2; exit 2; }
+
+case "$action" in
+	status) status ;;
+	list) list ;;
+	check) check ;;
+	verify) verify ;;
+	reconcile) reconcile ;;
+	*) usage >&2; exit 2 ;;
+esac

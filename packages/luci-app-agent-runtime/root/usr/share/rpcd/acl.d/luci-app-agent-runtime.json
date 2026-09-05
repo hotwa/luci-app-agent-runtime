@@ -1,0 +1,17 @@
+{
+	"luci-app-agent-runtime": {
+		"description": "Grant access to the local Agent Runtime manager",
+		"read": {
+			"uci": [ "agent-runtime" ],
+			"ubus": {
+				"agent-runtime": [ "status", "list", "job_status" ]
+			}
+		},
+		"write": {
+			"uci": [ "agent-runtime" ],
+			"ubus": {
+				"agent-runtime": [ "check", "verify", "reconcile" ]
+			}
+		}
+	}
+}

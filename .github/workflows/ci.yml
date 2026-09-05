@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Layout and security guards
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run package guards
+        run: |
+          set -euo pipefail
+          sh tests/test_package_layout.sh
+          sh tests/test_agent_runtime_cli.sh
+          git diff --check
+
+      - name: Scan for accidentally committed sensitive material
+        run: |
+          set -euo pipefail
+          matches="$(mktemp)"
+          if git grep -nIE \
+            -e 'BEGIN[[:space:]]+OPENSSH' \
+            -e 'PRIVATE[[:space:]]+KEY' \
+            -e '(^|[^[:alnum:]_])hskey-[[:alnum:]_-]{8,}' \
+            -e '(^|[^[:alnum:]_])tskey-[[:alnum:]_-]{8,}' \
+            -e '(^|[^[:alnum:]_])(token|password)[[:space:]]*=[[:space:]]*[^[:space:];#<>]{4,}' \
+            -- . >"$matches"; then
+            cat "$matches" >&2
+            exit 1
+          else
+            status=$?
+            test "$status" -eq 1
+          fi

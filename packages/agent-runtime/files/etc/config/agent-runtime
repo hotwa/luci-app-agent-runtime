@@ -1,0 +1,13 @@
+config agent_runtime 'main'
+	# The manager is safe to install without a payload. Enable only controls the
+	# boot-time status reconciliation; it never downloads or activates software.
+	option enabled '1'
+
+	# A compatible payload may maintain generations below this writable data root.
+	option data_root '/data'
+	option runtime_root '/data/agent-runtime'
+	option baseline_root '/opt/agent-runtime'
+
+	# Optional signed-release discovery. Keep credentials out of this file.
+	option release_url ''
+	option public_key '/etc/agent-runtime/usign.pub'

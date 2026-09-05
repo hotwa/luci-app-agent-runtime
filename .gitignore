@@ -1,0 +1,6 @@
+# Local OpenWrt SDK staging and package outputs
+.sdk-feed/
+artifacts/
+dist/
+logs/
+sdk-artifacts/

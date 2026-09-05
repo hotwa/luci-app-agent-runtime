@@ -1,0 +1,14 @@
+#!/bin/sh /etc/rc.common
+# SPDX-License-Identifier: MIT
+
+START=91
+STOP=10
+
+start() {
+	/usr/sbin/agent-runtime reconcile --json >/tmp/agent-runtime-reconcile.json 2>&1 || \
+		logger -t agent-runtime 'status reconciliation reported an unavailable optional runtime'
+}
+
+restart() {
+	start
+}
