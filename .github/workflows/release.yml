@@ -120,16 +120,28 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          TAG="$GITHUB_REF_NAME"
+          API="https://api.github.com/repos/$GITHUB_REPOSITORY"
+          UPLOAD="https://uploads.github.com/repos/$GITHUB_REPOSITORY"
+          AUTH="Authorization: token $GH_TOKEN"
+          ACCEPT="Accept: application/vnd.github+json"
           find release-assets -type f \( -name '*.ipk' -o -name '*.apk' \) -exec sha256sum {} \; | sort -k2 > release-assets/SHA256SUMS
-          # shellcheck disable=SC2086
-          assets=$(find release-assets -type f \( -name '*.ipk' -o -name '*.apk' -o -name SHA256SUMS \) -print | tr '\n' ' ')
-          gh release create "$GITHUB_REF_NAME" --generate-notes --repo "$GITHUB_REPOSITORY" || true
-          for i in 1 2 3 4 5; do
-            if gh release upload "$GITHUB_REF_NAME" $assets --clobber --repo "$GITHUB_REPOSITORY"; then
-              exit 0
-            fi
-            echo "upload attempt $i failed, retrying..."
-            sleep 5
+          # Create release if it does not exist yet (ignore failure).
+          curl -fsS -X POST -H "$AUTH" -H "$ACCEPT" "$API/releases" \
+            -d "{\"tag_name\":\"$TAG\",\"name\":\"$TAG\",\"generate_release_notes\":true}" >/dev/null 2>&1 || true
+          REL_ID=$(curl -fsS -H "$AUTH" -H "$ACCEPT" "$API/releases/tags/$TAG" | jq -r '.id')
+          echo "release id=$REL_ID"
+          for f in $(find release-assets -type f \( -name '*.ipk' -o -name '*.apk' -o -name SHA256SUMS \) -print); do
+            name=$(basename "$f")
+            existing=$(curl -fsS -H "$AUTH" -H "$ACCEPT" "$API/releases/$REL_ID/assets?per_page=100" \
+              | jq -r --arg n "$name" '.[] | select(.name == $n) | .id')
+            for aid in $existing; do
+              curl -fsS -X DELETE -H "$AUTH" -H "$ACCEPT" "$API/releases/assets/$aid" >/dev/null 2>&1 || true
+            done
+            echo "uploading $name"
+            curl -fsS -X POST -H "$AUTH" -H "$ACCEPT" \
+              -H "Content-Type: $(file -b --mime-type "$f")" \
+              --data-binary @"$f" \
+              "$UPLOAD/releases/$REL_ID/assets?name=$name" >/dev/null || { echo "upload failed for $name"; exit 1; }
           done
-          echo "release upload failed after 5 attempts" >&2
-          exit 1
+          echo "publish OK"
