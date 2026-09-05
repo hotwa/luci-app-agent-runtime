@@ -61,6 +61,12 @@ jobs:
           FEED_DIR: ${{ github.workspace }}/.sdk-feed
           FEEDNAME: agent_runtime
           INDEX: 1
+          # The feed is staged by tar without .git, so gh-action-sdk's
+          # shfmt check (`git -C <files> diff --quiet`) always fails with
+          # "fatal: not a git repository" and is a false positive. Init
+          # scripts are kept shfmt-compliant in-tree; skip the git-based
+          # check in the SDK container.
+          NO_SHFMT_CHECK: 1
           PACKAGES: agent-runtime luci-app-agent-runtime
           KEY_BUILD: ${{ secrets.IPK_SIGNING_KEY }}
           PRIVATE_KEY: ${{ secrets.APK_SIGNING_KEY }}
